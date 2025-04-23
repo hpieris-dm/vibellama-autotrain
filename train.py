@@ -17,11 +17,10 @@ from transformers import (
     BitsAndBytesConfig,
     TrainingArguments,
     set_seed,
-    DataCollatorForLanguageModeling
 )
 from peft import prepare_model_for_kbit_training, LoraConfig, get_peft_model
 from transformers import TrainerCallback
-from trl import SFTTrainer
+from trl import SFTTrainer, SFTProcessor
 
 import wandb
 from huggingface_hub import HfApi
@@ -166,22 +165,6 @@ def main():
     )
     model = get_peft_model(model, peft_config)
 
-    # Process datasets
-    processed_train_dataset = train_dataset.map(
-    process_dataset,
-    batched=True,
-    remove_columns=train_dataset.column_names,
-    desc="Formatting training examples"
-)
-
-    # Apply formatting to the evaluation dataset
-    processed_eval_dataset = eval_dataset.map(
-        process_dataset,
-        batched=True,
-        remove_columns=eval_dataset.column_names,
-        desc="Formatting evaluation examples"
-    )
-
     training_args = TrainingArguments(
         output_dir=args.output_dir,
         per_device_train_batch_size=args.batch_size,
@@ -208,12 +191,13 @@ def main():
         load_best_model_at_end=True
     )
 
+    processor = SFTProcessor(tokenizer, dataset_text_field="formatted_text")
     trainer = SFTTrainer(
         model=model,
         train_dataset=processed_train_dataset,
         eval_dataset=processed_eval_dataset,  # Add evaluation dataset
         args=training_args,
-        tokenizer=tokenizer,
+        processing_class=processor,
         dataset_text_field="formatted_text",
         max_seq_length=args.max_seq_len,             # Maximum sequence length reduced for memory efficiency
     )
