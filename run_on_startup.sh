@@ -24,7 +24,7 @@ set -euo pipefail
 
 # 2a) Load Conda and activate your fine‐tune env
 source /opt/conda/etc/profile.d/conda.sh
-conda activate vibellama-autotrain
+conda activate base
 
 # 2b) Prepare directories under /home/vibellama
 mkdir -p "\$HOME/logs" "\$HOME/models"
