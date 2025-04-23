@@ -1,44 +1,43 @@
-# VibeLlama Finetuning
+# VibeLlama Fine-tuning
 
-Python controller script (`controller.py`) automates the launching of GPU VMs on GCP for fine‑tuning multiple Llama‑3.2 models (1B, 3B, 11B) with different random seeds. Each VM will:
+A lightweight controller + startup script that spins up GPU VMs on GCP from your custom disk image, injects per-job metadata (model size, seed, HF & W&B tokens, repo settings), and runs Llama-3.2 fine-tuning in the background. Each VM:
 
-1. Clone the fine‑tuning repository
-2. Install dependencies
-3. Run the `train.py` script with the specified parameters
-4. Stream logs and metrics to Weights & Biases (W&B)
-5. Shut itself down upon successful completion
+1. Pulls its job spec and secrets from GCP metadata  
+2. Switches to the `vibellama` user and activates your pre-built Conda env  
+3. Clones (or updates) the fine-tune repo  
+4. Launches `train.py` via `nohup … &` (so the VM boots cleanly)  
+5. (Optionally) shuts itself down when training completes  
 
 ---
 
 ## Prerequisites
 
-- **gcloud CLI** installed and authenticated (`gcloud auth login`)
-- A GCP project with Compute Engine API enabled
-- **Python 3.8+** on your local machine
-- A Hugging Face token with write permissions, exported as:
+- **gcloud CLI** installed & authenticated  
   ```bash
-  export HF_TOKEN="your_hf_api_token"
-  ```
-- A W&B API key, exported as:
-  ```bash
-  export WANDB_API_KEY="your_wandb_api_key"
-  ```
+  gcloud auth login
+  gcloud config set project YOUR_PROJECT_ID
+  ```  
+- A GCP project with Compute Engine API enabled  
+- **Python 3.8+** on your workstation  
+- A **Hugging Face** token with write permissions  
+- A **Weights & Biases** API key  
 
 ---
 
-## Repository Structure
+## Files
 
 ```
-├── controller.py    # Controller script
-├── controller-config.json  # Experiment configuration (not tracked)
-└── train.py       # Fine‑tuning script in the VM repo
+├── controller.py         # launcher
+├── run_on_startup.sh     # boot-time script (must be executable)
+└── config.json           # experiment config (untracked)
+└── config.json.example   # experiment config example file
 ```
 
 ---
 
-## Configuration File (`controller-config.json`)
+## Configuration (`config.json`)
 
-Place a `controller-config.json` file in the same folder as `train.py`. Example:
+Create `config.json` next to `controller.py`—do **not** check it into git. Example:
 
 ```json
 {
@@ -49,71 +48,63 @@ Place a `controller-config.json` file in the same folder as `train.py`. Example:
   "machine_type": "a2-highgpu-1g",
   "gpu_type": "nvidia-tesla-a100",
   "gpu_count": 1,
-  "image_family": "pytorch-2-2-cu121-notebooks-debian-11",
-  "image_project": "deeplearning-platform-release",
-  "script_repo": "https://github.com/hpieris-dm/vibellama-autotrain.git",
-  "repo_dir": "/home/vibellama-ft",
-  "requirements": "requirements.txt",
+  "disk_image": "vibellama-tune-base",             
+  "script_repo": "https://github.com/you/llama-finetune.git",
+  "repo_dir": "/home/vibellama/llama-finetune",
   "wandb_project": "sentiment-sweep",
-  "model_hub_namespace": "huggingface user name"
+  "model_hub_namespace": "yourusername",
+  "hf_token": "hf_xxx…",  
+  "wandb_api_key": "wandb_xxx…"
 }
 ```
 
-- **model_sizes**: List of Llama model sizes (in billions) to fine-tune
-- **seeds**: Random seeds for repeatability
-- **gcp_project**: Your GCP project ID
-- **gcp_zone**: Compute zone for VM creation
-- **machine_type**: Machine type (e.g. `a2-highgpu-1g`)
-- **gpu_type**, **gpu_count**: GPU accelerator settings
-- **image_family**, **image_project**: Base image (e.g. Ubuntu 20.04 LTS)
-- **script_repo**: URL to your fine-tuning repo
-- **repo_dir**: Where to clone the repo on the VM
-- **requirements**: Requirements file within the repo
-- **wandb_project**: W&B project name for logging
-- **model_hub_namespace**: Your HF Hub namespace/user for uploads
+- **disk_image**: your custom GCP disk image with CUDA, Conda, deps baked in  
+- **script_repo** & **repo_dir**: where the VM should clone the training code  
+- **hf_token** & **wandb_api_key**: will be injected via metadata (never stored on disk)  
 
 ---
 
 ## Usage
 
-1. Clone or download this controller and place it in a folder.
-2. Create and populate `controller-config.json` as shown above.
-3. Ensure both `HF_TOKEN` and `WANDB_API_KEY` are set in your environment.
-4. Run:
+1. **Make the startup script executable**  
    ```bash
-   python3 controller.py --config controller-config.json
+   chmod +x run_on_startup.sh
    ```
-5. The script will iterate over all combinations of model sizes and seeds, launching a VM for each.
+2. **Fill in** `config.json` (including your secrets).  
+3. **Launch all jobs**:  
+   ```bash
+   python3 controller.py --config config.json
+   ```
+   This will iterate over every `model_size` × `seed`, create a VM for each, pass the metadata, and exit immediately.
+
+---
 
 ## Monitoring
 
-- **Compute Engine**: Track VM creation and status in the GCP Console.
-- **W&B**: View live training metrics under the specified project.
+- **GCP Console → Compute Engine**: watch VMs boot, then exit once the startup script finishes.  
+- **W&B**: live metrics under your `wandb_project`.
 
 ---
 
 ## Cleanup
 
-VMs automatically shut down after training. If any fail to shut down, delete them manually:
+VMs background the training process, but don’t auto-shutdown on success. To clean up any stragglers:
+
 ```bash
-gcloud compute instances list --filter="name~'llama-.*'" \
-  --format="value(name,zone)" | \
-  xargs -n2 gcloud compute instances delete -q --zone
+gcloud compute instances list --filter="name~'llama-.*'"   --format="value(name,zone')" |   xargs -n2 gcloud compute instances delete -q --zone
 ```
 
 ---
 
 ## Troubleshooting
 
-- **Missing credentials**: Ensure `HF_TOKEN` and `WANDB_API_KEY` are exported.
-- **Quota errors**: Check GPU quota in the GCP project.
-- **Image issues**: Switch to a GPU‑ready DL VM image or build a custom image with CUDA.
+- **Missing metadata**: ensure `hf_token` and `wandb_api_key` are in your `config.json`.  
+- **Conda not found**: verify your disk image has `/opt/conda` and that `run_on_startup.sh` sources `/opt/conda/etc/profile.d/conda.sh`.  
+- **Quota/limits**: check GPU quotas in your GCP project.  
+- **Repo errors**: confirm `script_repo` and `repo_dir` are correct and accessible.
 
 ---
 
 ## License
 
-MIT License.
-
----
-
+MIT License.

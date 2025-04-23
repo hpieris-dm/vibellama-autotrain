@@ -1,26 +1,10 @@
+# controller.py
 #!/usr/bin/env python3
 """
-Controller script to launch Llama-3.2 fine-tuning jobs on GCP for multiple model sizes and seeds,
-using a JSON configuration file for parameters. Each VM will pull the repo, install dependencies,
-run fine-tuning, log to W&B, then shutdown.
-
-Config file example (config.json):
-{
-  "model_sizes": [1, 3, 11],
-  "seeds": [42, 123, 456, 789, 555],
-  "gcp_project": "your-gcp-project",
-  "gcp_zone": "us-central1-a",
-  "machine_type": "a2-highgpu-1g",
-  "gpu_type": "nvidia-tesla-a100",
-  "gpu_count": 1,
-  "disk_image": "pytorch-2-2-cu121-notebooks-debian-11",
-  "script_repo": "https://github.com/you/llama-finetune.git",
-  "repo_dir": "/home/llama-finetune",
-  "requirements": "requirements.txt",
-  "wandb_project": "sentiment-sweep",
-  "model_hub_namespace": "yourusername"
-}
+Controller script to launch Llama-3.2 fine-tuning VMs on GCP.
+Each VM reads metadata, runs the startup script in background, then exits.
 """
+
 import os
 import subprocess
 import time
@@ -28,7 +12,19 @@ import uuid
 import argparse
 import json
 
+def print_banner():
+    banner = [
+        "############################################################",
+        "#                                                          #",
+        "#          🦙  VibeLlama Launcher Starting...         🦙    #",
+        "#                                                          #",
+        "############################################################",
+    ]
+    for line in banner:
+        print(line)
+    print()  # blank line
 
+    
 def load_config(path: str) -> dict:
     with open(path, 'r') as f:
         return json.load(f)
@@ -37,36 +33,18 @@ def load_config(path: str) -> dict:
 def launch_job(size: int, seed: int, cfg: dict) -> None:
     vm_name = f"llama-{size}b-seed{seed}-{uuid.uuid4().hex[:6]}"
 
-    startup_script = f"""#!/bin/bash
-set -xe
-
-# Export credentials
-export HF_TOKEN={os.getenv('HF_TOKEN')}
-export WANDB_API_KEY={os.getenv('WANDB_API_KEY')}
-
-# Basic setup
-conda activate base
-apt-get update && apt-get install -y git python3-pip
-pip3 install --upgrade pip
-pip3 install -r {cfg['requirements']}
-
-# Clone fine-tune repo
-rm -rf {cfg['repo_dir']}
-git clone {cfg['script_repo']} {cfg['repo_dir']}
-cd {cfg['repo_dir']}
-
-# Run fine-tuning
-nohup python3 train.py \
-  --model-name meta-llama/Llama-3.2-{size}B-Instruct \
-  --seed {seed} \
-  --hf-token ${{HF_TOKEN}} \
-  --wandb-project {cfg['wandb_project']} \
-  --output-dir /home/models/size{size}_seed{seed} \
-  --model-hub-id {cfg['model_hub_namespace']}/VibeLlama-{size}b-seed-{seed} \
-  > /home/logs/size{size}_seed{seed}.log 2>&1 &
-
-exit 0
-"""
+    # Build metadata string
+    md_items = [
+        f"seed={seed}",
+        f"size={size}",
+        f"HF_TOKEN={cfg['hf_token']}",
+        f"WANDB_API_KEY={cfg['wandb_api_key']}",
+        f"repo_dir={cfg['repo_dir']}",
+        f"script_repo={cfg['script_repo']}",
+        f"wandb_project={cfg['wandb_project']}",
+        f"model_hub_namespace={cfg['model_hub_namespace']}"
+    ]
+    metadata = ",".join(md_items)
 
     cmd = [
         "gcloud", "compute", "instances", "create", vm_name,
@@ -77,37 +55,39 @@ exit 0
         "--maintenance-policy=TERMINATE",
         "--restart-on-failure",
         f"--image={cfg['disk_image']}",
-        f"--metadata=startup-script={startup_script}"
+        f"--metadata={metadata}",
+        "--metadata-from-file=startup-script=run_on_startup.sh"
     ]
 
-    print(f"Launching VM '{vm_name}' for size={size}B seed={seed}...")
+    print(f"[+] Launching {vm_name} (size={size}B, seed={seed})…")
     subprocess.check_call(cmd)
-    print(f"VM '{vm_name}' launched.")
+    print(f"[✓] Launched {vm_name}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Launch Llama fine-tune VMs on GCP")
-    parser.add_argument("--config", type=str, default="config.json",
+    print_banner() 
+    parser = argparse.ArgumentParser(
+        description="Launch Llama fine-tune VMs on GCP"
+    )
+    parser.add_argument("--config", "-c", default="config.json",
                         help="Path to JSON config file")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
 
-    # Validate HF_TOKEN
-    if not os.getenv("HF_TOKEN"):
-        raise EnvironmentError("HF_TOKEN environment variable is required")
-    # Validate W&B API key
-    if not os.getenv("WANDB_API_KEY"):
-        raise EnvironmentError("WANDB_API_KEY environment variable is required")
+    # Ensure tokens are in the config
+    if not cfg.get("hf_token"):
+        raise RuntimeError("`hf_token` must be set in config.json")
+    if not cfg.get("wandb_api_key"):
+        raise RuntimeError("`wandb_api_key` must be set in config.json")
 
-    # Launch jobs
-    for size in cfg['model_sizes']:
-        for seed in cfg['seeds']:
+    for size in cfg["model_sizes"]:
+        for seed in cfg["seeds"]:
             try:
                 launch_job(size, seed, cfg)
             except subprocess.CalledProcessError as e:
-                print(f"Failed to launch job for size={size}, seed={seed}: {e}")
-            time.sleep(10)  # avoid API rate limits
+                print(f"[!] Failed to launch size={size}, seed={seed}: {e}")
+            time.sleep(10)  # throttle GCP API calls
 
 
 if __name__ == "__main__":
