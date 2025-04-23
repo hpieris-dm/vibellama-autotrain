@@ -13,8 +13,7 @@ Config file example (config.json):
   "machine_type": "a2-highgpu-1g",
   "gpu_type": "nvidia-tesla-a100",
   "gpu_count": 1,
-  "image_family": "pytorch-2-2-cu121-notebooks-debian-11",
-  "image_project": "deeplearning-platform-release",
+  "disk_image": "pytorch-2-2-cu121-notebooks-debian-11",
   "script_repo": "https://github.com/you/llama-finetune.git",
   "repo_dir": "/home/llama-finetune",
   "requirements": "requirements.txt",
@@ -77,10 +76,8 @@ exit 0
         f"--accelerator=type={cfg['gpu_type']},count={cfg['gpu_count']}",
         "--maintenance-policy=TERMINATE",
         "--restart-on-failure",
-        f"--image-family={cfg['image_family']}",
-        f"--image-project={cfg['image_project']}",
-        f"--metadata=startup-script={startup_script}",
-        "--metadata=install-nvidia-driver=True"
+        f"--image={cfg['disk_image']}",
+        f"--metadata=startup-script={startup_script}"
     ]
 
     print(f"Launching VM '{vm_name}' for size={size}B seed={seed}...")

@@ -6,8 +6,7 @@
   "machine_type": "a2-highgpu-1g",
   "gpu_type": "nvidia-tesla-a100",
   "gpu_count": 1,
-  "image_family": "pytorch-2-2-cu121-notebooks-debian-11",
-  "image_project": "deeplearning-platform-release",
+  "disk_image": "pytorch-2-2-cu121-notebooks-debian-11",
   "script_repo": "",
   "repo_dir": "", // Directory where the script repository is cloned
   "requirements": "requirements.txt",
