@@ -39,13 +39,14 @@ def launch_job(size: int, seed: int, cfg: dict) -> None:
     vm_name = f"llama-{size}b-seed{seed}-{uuid.uuid4().hex[:6]}"
 
     startup_script = f"""#!/bin/bash
-set -e
+set -xe
 
 # Export credentials
 export HF_TOKEN={os.getenv('HF_TOKEN')}
 export WANDB_API_KEY={os.getenv('WANDB_API_KEY')}
 
 # Basic setup
+conda activate base
 apt-get update && apt-get install -y git python3-pip
 pip3 install --upgrade pip
 pip3 install -r {cfg['requirements']}
@@ -56,16 +57,16 @@ git clone {cfg['script_repo']} {cfg['repo_dir']}
 cd {cfg['repo_dir']}
 
 # Run fine-tuning
-python3 train.py \
+nohup python3 train.py \
   --model-name meta-llama/Llama-3.2-{size}B-Instruct \
   --seed {seed} \
   --hf-token ${{HF_TOKEN}} \
   --wandb-project {cfg['wandb_project']} \
   --output-dir /home/models/size{size}_seed{seed} \
-  --model-hub-id {cfg['model_hub_namespace']}/VibeLlama-{size}b-seed-{seed} && \
+  --model-hub-id {cfg['model_hub_namespace']}/VibeLlama-{size}b-seed-{seed} \
+  > /home/logs/size{size}_seed{seed}.log 2>&1 &
 
-# Shutdown on success
-shutdown -h now
+exit 0
 """
 
     cmd = [
@@ -78,7 +79,8 @@ shutdown -h now
         "--restart-on-failure",
         f"--image-family={cfg['image_family']}",
         f"--image-project={cfg['image_project']}",
-        f"--metadata=startup-script={startup_script}"
+        f"--metadata=startup-script={startup_script}",
+        "--metadata=install-nvidia-driver=True"
     ]
 
     print(f"Launching VM '{vm_name}' for size={size}B seed={seed}...")
