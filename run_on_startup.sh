@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 0) Safety shutdown in 4 hours
+# 0) Schedule auto-shutdown after 4 hours
 shutdown -h +240 "Auto-shutdown 4h after boot"
 
-# 1) Read metadata in outer script
+# 1) Read metadata into outer-shell variables
 MD="http://metadata.google.internal/computeMetadata/v1/instance/attributes"
 HDR="Metadata-Flavor: Google"
 
@@ -17,32 +17,50 @@ SCRIPT_REPO=$(curl -fs -H "$HDR" $MD/script_repo)
 WANDB_PROJECT=$(curl -fs -H "$HDR" $MD/wandb_project)
 MODEL_HUB_NAMESPACE=$(curl -fs -H "$HDR" $MD/model_hub_namespace)
 
-# 2) Switch to vibellama’s login shell and run startup tasks
-sudo -iu vibellama bash <<EOSU
+# 2) Generate an inner run script under vibellama’s home
+INNER_SCRIPT="/home/vibellama/run_training.sh"
+cat <<EOF | sudo tee "$INNER_SCRIPT" > /dev/null
+#!/usr/bin/env bash
 set -euo pipefail
 
-# 2a) Load Conda and activate 'base'
+# Export metadata as env vars inside inner script
+export SEED="${SEED}"
+export SIZE="${SIZE}"
+export HF_TOKEN="${HF_TOKEN}"
+export WANDB_API_KEY="${WANDB_API_KEY}"
+export REPO_DIR="${REPO_DIR}"
+export SCRIPT_REPO="${SCRIPT_REPO}"
+export WANDB_PROJECT="${WANDB_PROJECT}"
+export MODEL_HUB_NAMESPACE="${MODEL_HUB_NAMESPACE}"
+
+# Load Conda and activate 'base'
 source /opt/conda/etc/profile.d/conda.sh
 conda activate base
 
-# 2b) Prepare directories under /home/vibellama
+# Prepare directories
 mkdir -p "\$HOME/logs" "\$HOME/models"
 
-# 2c) Clone or update the repo
-rm -rf "${REPO_DIR}"
-git clone "${SCRIPT_REPO}" "${REPO_DIR}"
-cd "${REPO_DIR}"
+# Clone/update repo
+rm -rf "\$REPO_DIR"
+git clone "\$SCRIPT_REPO" "\$REPO_DIR"
+cd "\$REPO_DIR"
 
-# 2d) Launch training in the background
+# Launch training in background
 nohup python train.py \
-  --model-name meta-llama/Llama-3.2-${SIZE}B-Instruct \
-  --seed ${SEED} \
-  --hf-token ${HF_TOKEN} \
-  --wandb-project ${WANDB_PROJECT} \
-  --output-dir "\$HOME/models/size${SIZE}_seed${SEED}" \
-  --model-hub-id "${MODEL_HUB_NAMESPACE}/VibeLlama-${SIZE}b-seed-${SEED}" \
-  > "\$HOME/logs/size${SIZE}_seed${SEED}.out" 2>&1 &
+  --model-name meta-llama/Llama-3.2-\${SIZE}B-Instruct \
+  --seed \${SEED} \
+  --hf-token \${HF_TOKEN} \
+  --wandb-project \${WANDB_PROJECT} \
+  --output-dir "\$HOME/models/size\${SIZE}_seed\${SEED}" \
+  --model-hub-id "\${MODEL_HUB_NAMESPACE}/VibeLlama-\${SIZE}b-seed-\${SEED}" \
+  > "\$HOME/logs/size\${SIZE}_seed\${SEED}.out" 2>&1 &
 
-# 2e) Exit so GCE marks the startup script as done
+EOF
+
+# 3) Make it executable and run as vibellama
+sudo chmod +x "$INNER_SCRIPT"
+sudo chown vibellama:vibellama "$INNER_SCRIPT"
+sudo -u vibellama bash -lc "$INNER_SCRIPT"
+
+# 4) Exit startup
 exit 0
-EOSU
