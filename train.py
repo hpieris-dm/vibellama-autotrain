@@ -57,28 +57,42 @@ class BestEpochCallback(TrainerCallback):
 
 
 def format_prompt(review, sentiment):
-    # Chat-format prompt
-    system_prompt = "You are a helpful assistant that analyzes sentiment."
+    """
+    Format the input for Llama 3.2 using the chat template with system and user messages.
+    """
+    system_prompt = "You are a helpful assistant that analyzes the sentiment of provided inputs."
+    
+    # Convert the binary label to text
     sentiment_text = "positive" if sentiment == 1 else "negative"
+    
+    # Truncate review if it's too long (for efficiency)
     if len(review) > 1000:
         review = review[:1000] + "..."
-    return (
-        f"<|begin_of_text|><|system|>\n{system_prompt}<|end_of_text|>"
-        f"<|assistant|>\n{sentiment_text}<|end_of_text|>"
-    )
+    
+    # Format using Llama 3.2 chat template
+    prompt = f"<|begin_of_text|><|system|>\n{system_prompt}<|end_of_text|>\n<|user|>\nDetermine if the following input has a positive or negative sentiment. Reply with only 'positive' or 'negative'.\n\nReview: {review}<|end_of_text|>\n<|assistant|>\n{sentiment_text}<|end_of_text|>"
+    return prompt
 
 
-def process_dataset(batch, tokenizer, max_seq_len):
-    prompts = [format_prompt(r, s) for r, s in zip(batch['text'], batch['label'])]
-    tokenized = tokenizer(
-        prompts,
-        truncation=True,
-        max_length=max_seq_len,
-        padding='max_length',
-    )
-    tokenized['labels'] = tokenized['input_ids'].copy()
-    return tokenized
+def process_dataset(examples):
+    formatted_prompts = [format_prompt(review, label) for review, label in zip(examples["text"], examples["label"])]
+    return {"formatted_text": formatted_prompts}
 
+# Apply formatting to the training dataset
+processed_train_dataset = train_dataset.map(
+    process_dataset,
+    batched=True,
+    remove_columns=train_dataset.column_names,
+    desc="Formatting training examples"
+)
+
+# Apply formatting to the evaluation dataset
+processed_eval_dataset = eval_dataset.map(
+    process_dataset,
+    batched=True,
+    remove_columns=eval_dataset.column_names,
+    desc="Formatting evaluation examples"
+)
 
 def main():
     args = parse_args()
@@ -111,10 +125,17 @@ def main():
     )
 
     # Load dataset
-    dataset = load_dataset("imdb")
-    train_split = dataset['train'].train_test_split(test_size=0.1, seed=args.seed)
-    train_ds = train_split['train']
-    eval_ds = train_split['test']
+    imdb_dataset = load_dataset("imdb")
+    # Use the full training set
+    train_dataset = imdb_dataset["train"]
+    print(f"Total training examples: {len(train_dataset)}")
+
+    # Create a 90/10 split for training and evaluation
+    train_eval_split = train_dataset.train_test_split(test_size=0.1, seed=args.seed)
+    train_dataset = train_eval_split["train"]
+    eval_dataset = train_eval_split["test"]
+    print(f"Training examples after split: {len(train_dataset)}")
+    print(f"Evaluation examples: {len(eval_dataset)}")
 
     # Load quantized model & tokenizer
     bnb_config = BitsAndBytesConfig(
@@ -145,47 +166,61 @@ def main():
     model = get_peft_model(model, peft_config)
 
     # Process datasets
-    processed_train = train_ds.map(
-        lambda batch: process_dataset(batch, tokenizer, args.max_seq_len),
-        batched=True,
-        remove_columns=train_ds.column_names
-    )
-    processed_eval = eval_ds.map(
-        lambda batch: process_dataset(batch, tokenizer, args.max_seq_len),
-        batched=True,
-        remove_columns=eval_ds.column_names
-    )
-    # Data collator
-    data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+    processed_train_dataset = train_dataset.map(
+    process_dataset,
+    batched=True,
+    remove_columns=train_dataset.column_names,
+    desc="Formatting training examples"
+)
 
-    # Training arguments
+    # Apply formatting to the evaluation dataset
+    processed_eval_dataset = eval_dataset.map(
+        process_dataset,
+        batched=True,
+        remove_columns=eval_dataset.column_names,
+        desc="Formatting evaluation examples"
+    )
+
     training_args = TrainingArguments(
         output_dir=args.output_dir,
-        num_train_epochs=args.epochs,
         per_device_train_batch_size=args.batch_size,
+        per_device_eval_batch_size=args.batch_size,
         gradient_accumulation_steps=args.grad_accum_steps,
         learning_rate=args.learning_rate,
-        evaluation_strategy='epoch',
-        save_strategy='epoch',
-        logging_strategy='steps',
+        lr_scheduler_type="cosine",
+        warmup_ratio=0.1,
+        num_train_epochs=args.epochs,
+        save_strategy="epoch",
+        eval_strategy="epoch",
         logging_steps=50,
-        load_best_model_at_end=True,
-        fp16=True,
-        push_to_hub=False
+        save_total_limit=3,
+        remove_unused_columns=True,
+        push_to_hub=False,
+        report_to="none",
+        bf16=True,                      # Use bfloat16 precision
+        weight_decay=0.01,              # Standard weight decay
+        max_grad_norm=1.0,              # Gradient clipping
+        seed=args.seed,                      # Use the same seed from above
+        data_seed=args.seed,                 # Use the same seed for data shuffling
+        metric_for_best_model="eval_loss",
+        greater_is_better=False,
+        load_best_model_at_end=True
     )
 
-    # Trainer
     trainer = SFTTrainer(
         model=model,
+        train_dataset=processed_train_dataset,
+        eval_dataset=processed_eval_dataset,  # Add evaluation dataset
         args=training_args,
-        train_dataset=processed_train,
-        eval_dataset=processed_eval,
-        data_collator=data_collator,
-        callbacks=[BestEpochCallback()]
+        tokenizer=tokenizer,
+        dataset_text_field="formatted_text",
+        max_seq_length=args.max_seq_len,             # Maximum sequence length reduced for memory efficiency
     )
 
     # Train
     start = datetime.now()
+    best_epoch_callback = BestEpochCallback()
+    trainer.add_callback(best_epoch_callback)
     trainer.train()
     elapsed = datetime.now() - start
     logger.info(f"Training completed in {elapsed}")
