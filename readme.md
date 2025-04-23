@@ -81,7 +81,7 @@ Place a `controller-config.json` file in the same folder as `train.py`. Example:
 3. Ensure both `HF_TOKEN` and `WANDB_API_KEY` are set in your environment.
 4. Run:
    ```bash
-   python3 launch_llama_jobs.py --config controller-config.json
+   python3 controller.py --config controller-config.json
    ```
 5. The script will iterate over all combinations of model sizes and seeds, launching a VM for each.
 

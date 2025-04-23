@@ -20,7 +20,9 @@ from transformers import (
     DataCollatorForLanguageModeling
 )
 from peft import prepare_model_for_kbit_training, LoraConfig, get_peft_model
-from trl import SFTTrainer, TrainerCallback
+from transformers import TrainerCallback
+from trl import SFTTrainer
+
 import wandb
 from huggingface_hub import HfApi
 
@@ -66,12 +68,12 @@ def format_prompt(review, sentiment):
     )
 
 
-def process_dataset(batch):
+def process_dataset(batch, tokenizer, max_seq_len):
     prompts = [format_prompt(r, s) for r, s in zip(batch['text'], batch['label'])]
     tokenized = tokenizer(
         prompts,
         truncation=True,
-        max_length=args.max_seq_len,
+        max_length=max_seq_len,
         padding='max_length',
     )
     tokenized['labels'] = tokenized['input_ids'].copy()
@@ -143,9 +145,16 @@ def main():
     model = get_peft_model(model, peft_config)
 
     # Process datasets
-    processed_train = train_ds.map(process_dataset, batched=True, remove_columns=train_ds.column_names)
-    processed_eval = eval_ds.map(process_dataset, batched=True, remove_columns=eval_ds.column_names)
-
+    processed_train = train_ds.map(
+        lambda batch: process_dataset(batch, tokenizer, args.max_seq_len),
+        batched=True,
+        remove_columns=train_ds.column_names
+    )
+    processed_eval = eval_ds.map(
+        lambda batch: process_dataset(batch, tokenizer, args.max_seq_len),
+        batched=True,
+        remove_columns=eval_ds.column_names
+    )
     # Data collator
     data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
 
@@ -162,7 +171,7 @@ def main():
         logging_steps=50,
         load_best_model_at_end=True,
         fp16=True,
-        push_to_hub=False,
+        push_to_hub=False
     )
 
     # Trainer
