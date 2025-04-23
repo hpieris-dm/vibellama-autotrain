@@ -45,9 +45,21 @@ rm -rf "\$REPO_DIR"
 git clone "\$SCRIPT_REPO" "\$REPO_DIR"
 cd "\$REPO_DIR"
 
+# conditionally set the model name based on size
+if [ "\${SIZE}" -eq 1 ]; then
+  MODEL_NAME="meta-llama/Llama-3.2-1B-Instruct"
+elif [ "\${SIZE}" -eq 3 ]; then
+  MODEL_NAME="meta-llama/Llama-3.2-3B-Instruct"
+elif [ "\${SIZE}" -eq 11 ]; then
+  MODEL_NAME="meta-llama/Llama-3.2-11B-Vision-Instruct"
+else
+  echo "Unsupported model size: \${SIZE}B"
+  exit 1
+fi
+
 # Launch training in background
 nohup python train.py \
-  --model-name meta-llama/Llama-3.2-\${SIZE}B-Instruct \
+  --model-name \${MODEL_NAME} \
   --seed \${SEED} \
   --hf-token \${HF_TOKEN} \
   --wandb-project \${WANDB_PROJECT} \
