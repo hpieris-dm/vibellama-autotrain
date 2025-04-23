@@ -6,7 +6,7 @@
   "machine_type": "a2-highgpu-1g",
   "gpu_type": "nvidia-tesla-a100",
   "gpu_count": 1,
-  "disk_image": "pytorch-2-2-cu121-notebooks-debian-11",
+  "disk_image": "llm-tocrch-cuda-ft",
   "script_repo": "",
   "repo_dir": "", // Directory where the script repository is cloned
   "requirements": "requirements.txt",
