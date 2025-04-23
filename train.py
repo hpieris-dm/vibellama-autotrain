@@ -78,21 +78,6 @@ def process_dataset(examples):
     formatted_prompts = [format_prompt(review, label) for review, label in zip(examples["text"], examples["label"])]
     return {"formatted_text": formatted_prompts}
 
-# Apply formatting to the training dataset
-processed_train_dataset = train_dataset.map(
-    process_dataset,
-    batched=True,
-    remove_columns=train_dataset.column_names,
-    desc="Formatting training examples"
-)
-
-# Apply formatting to the evaluation dataset
-processed_eval_dataset = eval_dataset.map(
-    process_dataset,
-    batched=True,
-    remove_columns=eval_dataset.column_names,
-    desc="Formatting evaluation examples"
-)
 
 def main():
     args = parse_args()
@@ -136,6 +121,22 @@ def main():
     eval_dataset = train_eval_split["test"]
     print(f"Training examples after split: {len(train_dataset)}")
     print(f"Evaluation examples: {len(eval_dataset)}")
+
+    # Apply formatting to the training dataset
+    processed_train_dataset = train_dataset.map(
+        process_dataset,
+        batched=True,
+        remove_columns=train_dataset.column_names,
+        desc="Formatting training examples"
+    )
+
+    # Apply formatting to the evaluation dataset
+    processed_eval_dataset = eval_dataset.map(
+        process_dataset,
+        batched=True,
+        remove_columns=eval_dataset.column_names,
+        desc="Formatting evaluation examples"
+    )
 
     # Load quantized model & tokenizer
     bnb_config = BitsAndBytesConfig(
