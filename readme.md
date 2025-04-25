@@ -49,7 +49,7 @@ Create `config.json` next to `controller.py`—do **not** check it into git. Exa
   "gpu_type": "nvidia-tesla-a100",
   "gpu_count": 1,
   "disk_image": "vibellama-tune-base",             
-  "script_repo": "https://github.com/you/llama-finetune.git",
+  "script_repo": "https://github.com/github_id/llama-finetune.git",
   "repo_dir": "/home/vibellama/llama-finetune",
   "wandb_project": "sentiment-sweep",
   "model_hub_namespace": "HF username",

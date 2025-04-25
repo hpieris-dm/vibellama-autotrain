@@ -6,6 +6,7 @@ import os
 import argparse
 import logging
 import json
+import textwrap
 from datetime import datetime
 
 import torch
@@ -78,26 +79,46 @@ def process_dataset(examples):
     return {"formatted_text": formatted_prompts}
 
 
+def generate_readme_content(model_name: str, output_dir: str):
+    """
+    Overwrite (or create) README.md with valid front-matter
+    so Hugging Face Hub will accept the upload.
+    """
+    readme_path = os.path.join(output_dir, "README.md")
+    content = textwrap.dedent(f"""\
+        ---
+        base_model: {model_name}
+        tags:
+          - text-generation
+        license: mit
+        ---
+
+        This LoRA adapter was fine-tuned from `{model_name}` on the IMDb dataset using QLoRA.
+        """)
+    with open(readme_path, "w") as f:
+        f.write(content)
+
+
 def main():
     args = parse_args()
 
-    # Set random seed
     set_seed(args.seed)
     torch.manual_seed(args.seed)
 
-    # Configure logging
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(__name__)
 
-    # Tokens and directories
     if not args.hf_token:
-        logger.error("HF token not provided; set HF_TOKEN env var or pass --hf-token.")
+        logger.error("HF token not provided. Set HF_TOKEN env var or pass --hf-token.")
         return
+    if not args.output_dir:
+        logger.error("Output directory not provided.")
+        return
+    if not args.model_hub_id:
+        logger.error("Model hub ID not provided.")
+        return
+    
     os.environ['WANDB_API_KEY'] = os.getenv('WANDB_API_KEY', '')
-
-    # Decide output_dir and model_hub_id if not set
-    args.output_dir = args.output_dir or f"llama_3_2_1b_qlora_seed{args.seed}"
-    args.model_hub_id = args.model_hub_id or f"yourusername/VibeLlama-1b-seed-{args.seed}"
 
     # Initialize W&B
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -110,6 +131,7 @@ def main():
 
     # Load dataset
     imdb_dataset = load_dataset("imdb")
+    
     # Use the full training set
     train_dataset = imdb_dataset["train"]
     print(f"Total training examples: {len(train_dataset)}")
@@ -184,8 +206,8 @@ def main():
         bf16=True,                      # Use bfloat16 precision
         weight_decay=0.01,              # Standard weight decay
         max_grad_norm=1.0,              # Gradient clipping
-        seed=args.seed,                      # Use the same seed from above
-        data_seed=args.seed,                 # Use the same seed for data shuffling
+        seed=args.seed,                 # Use the same seed from above
+        data_seed=args.seed,            # Use the same seed for data shuffling
         metric_for_best_model="eval_loss",
         greater_is_better=False,
         load_best_model_at_end=True
@@ -198,7 +220,7 @@ def main():
         args=training_args,
         tokenizer=tokenizer,
         dataset_text_field="formatted_text",
-        max_seq_length=args.max_seq_len,             # Maximum sequence length reduced for memory efficiency
+        max_seq_length=args.max_seq_len,      # Maximum sequence length reduced for memory efficiency
     )
 
     # Train
@@ -226,6 +248,7 @@ def main():
         json.dump(metadata, f, indent=2)
 
     # Push to Hugging Face Hub
+    generate_readme_content(args.model_name, args.output_dir)
     api = HfApi()
     api.create_repo(args.model_hub_id, exist_ok=True)
     api.upload_folder(folder_path=args.output_dir, repo_id=args.model_hub_id)
